@@ -76,3 +76,11 @@
 - https://learn.chatgpt.com/docs/config-file/config-advanced
 
 第三方 provider 接入可能受客户端版本、账号能力、服务端协议和地区网络影响。请把它当作可回滚的本地实验工具，不要把它当作 OpenAI 官方 ChatGPT Desktop 的内置 provider 功能。
+
+## 当前版本验证
+
+当前实现已经通过 38 条 Swift 单元测试和 release build；测试覆盖配置转换、快照原子替换、Keychain 抽象、endpoint 预检、进程生命周期、事务回滚、UI view-model、命令行 intent 和历史 sentinel 不变式。
+
+打包验收使用临时 staging 目录，三个 app bundle 均通过 plist 检查和 ad-hoc code-sign 验证。自动化验收不会点击 DeepSeek 切换；首次真实切换必须由用户明确在 UI 中触发。
+
+验证真实 Codex home 时，不应把普通 sqlite3 只读查询后的 WAL/SHM 哈希变化误判为应用写入证据：SQLite 读取器可能更新共享内存元数据。应用自身不连接历史数据库，历史保护以不打开数据库和事务测试中的 sentinel 为边界。
