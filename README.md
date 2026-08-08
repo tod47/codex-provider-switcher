@@ -13,6 +13,8 @@
 
 目前没有为仓库选择开源许可证；在发布到 GitHub 前，请先补充许可证和项目归属信息。
 
+贡献和安全边界见 CONTRIBUTING.md、SECURITY.md；分层、事务阶段和数据不变式见 docs/architecture.md。
+
 ## 构建和测试
 
 需要 macOS 14 或更高版本、Swift 6 工具链：
