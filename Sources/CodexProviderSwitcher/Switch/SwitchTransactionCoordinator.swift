@@ -83,7 +83,7 @@ enum SwitchError: Error, Equatable {
     case rolledBack
 }
 
-final class SwitchTransactionCoordinator: @unchecked Sendable {
+final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching {
     private let settings: SwitchSettings
     private let transformer: CodexConfigTransformer
     private let snapshotStore: any ConfigSnapshotStoring
@@ -119,6 +119,14 @@ final class SwitchTransactionCoordinator: @unchecked Sendable {
     func currentMode() throws -> ProviderMode {
         let config = try readConfig()
         return transformer.detectMode(in: config, settings: settings.deepSeek)
+    }
+
+    func checkPreflight() async throws -> EndpointPreflightReport {
+        let secret = try requiredDeepSeekSecret()
+        return await preflight.check(
+            settings: settings.deepSeek,
+            secretAvailable: secret != nil
+        )
     }
 
     func switchTo(_ targetMode: ProviderMode) async throws -> SwitchResult {
