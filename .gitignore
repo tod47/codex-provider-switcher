@@ -1,0 +1,13 @@
+.worktrees/
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+.env
+auth.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+sessions/
+snapshots/
+logs/
