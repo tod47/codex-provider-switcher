@@ -5,7 +5,7 @@ import XCTest
 
 final class EndpointPreflightTests: XCTestCase {
     func testPreflightRejectsMissingSecret() async throws {
-        let probe = RecordingHTTPProbe(status: 200)
+        let probe = EndpointRecordingHTTPProbe(status: 200)
         let preflight = EndpointPreflight(probe: probe)
         let settings = try DeepSeekSettings(
             model: "deepseek-test",
@@ -20,7 +20,7 @@ final class EndpointPreflightTests: XCTestCase {
     }
 
     func testPreflightRejectsNonResponsesWireAPI() async throws {
-        let probe = RecordingHTTPProbe(status: 200)
+        let probe = EndpointRecordingHTTPProbe(status: 200)
         let preflight = EndpointPreflight(probe: probe)
         let settings = try decodeSettings(wireAPI: "chat_completions")
 
@@ -32,7 +32,7 @@ final class EndpointPreflightTests: XCTestCase {
     }
 
     func testPreflightTreats401AsReachableButReportsResponsesDeclaration() async throws {
-        let probe = RecordingHTTPProbe(status: 401)
+        let probe = EndpointRecordingHTTPProbe(status: 401)
         let preflight = EndpointPreflight(probe: probe)
         let settings = try DeepSeekSettings(
             model: "deepseek-test",
@@ -47,7 +47,7 @@ final class EndpointPreflightTests: XCTestCase {
     }
 
     func testPreflightRejectsMalformedURLOrUnsupportedScheme() async throws {
-        let probe = RecordingHTTPProbe(status: 200)
+        let probe = EndpointRecordingHTTPProbe(status: 200)
         let preflight = EndpointPreflight(probe: probe)
         let settings = try decodeSettings(baseURL: "file:///tmp/deepseek")
 
@@ -74,7 +74,7 @@ final class EndpointPreflightTests: XCTestCase {
     }
 }
 
-private final class RecordingHTTPProbe: HTTPProbe, @unchecked Sendable {
+private final class EndpointRecordingHTTPProbe: HTTPProbe, @unchecked Sendable {
     let status: Int
     private(set) var callCount = 0
 

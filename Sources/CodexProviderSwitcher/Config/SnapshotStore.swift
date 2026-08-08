@@ -15,7 +15,7 @@ enum SnapshotStoreError: Error, Equatable {
     case replacementFailed(String)
 }
 
-final class SnapshotStore {
+final class SnapshotStore: ConfigSnapshotStoring {
     private let rootURL: URL
     private let fileManager: FileManager
 
