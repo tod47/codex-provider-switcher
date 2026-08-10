@@ -138,12 +138,20 @@ final class RecordingProviderSwitching: ProviderSwitching, @unchecked Sendable {
         currentModeValue
     }
 
+    func currentStatus() throws -> ProviderStatus {
+        switchResult?.status ?? .unverified(mode: currentModeValue)
+    }
+
     func switchTo(_ targetMode: ProviderMode) async throws -> SwitchResult {
         switchCalls.append(targetMode)
         if let switchError {
             throw switchError
         }
         return switchResult ?? SwitchResult(targetMode: targetMode, snapshotID: nil)
+    }
+
+    func verifyCurrentProvider() async throws -> ProviderStatus {
+        switchResult?.status ?? .unverified(mode: currentModeValue)
     }
 
     func checkPreflight() async throws -> EndpointPreflightReport {

@@ -57,6 +57,11 @@ final class RecordingProcessController: ChatGPTProcessControlling, @unchecked Se
             throw launchError
         }
     }
+
+    func waitUntilRunning(timeout: Duration) async -> Bool {
+        events.append("ready")
+        return running
+    }
 }
 
 struct RecordingHTTPProbe: HTTPProbe {
@@ -64,6 +69,32 @@ struct RecordingHTTPProbe: HTTPProbe {
 
     func head(_ url: URL, timeout: Duration) async throws -> Int {
         status
+    }
+}
+
+final class RecordingModelCatalogChecker: DeepSeekModelCatalogChecking, @unchecked Sendable {
+    var models: [String]
+
+    init(models: [String]) {
+        self.models = models
+    }
+
+    func listModels(baseURL: URL, apiKey: String, timeout: Duration) async throws -> [String] {
+        models
+    }
+}
+
+final class RecordingModelResponseTester: DeepSeekModelResponseTesting, @unchecked Sendable {
+    let model: String
+    private(set) var callCount = 0
+
+    init(model: String) {
+        self.model = model
+    }
+
+    func sendMinimalTest(baseURL: URL, model: String, apiKey: String, timeout: Duration) async throws -> String {
+        callCount += 1
+        return self.model
     }
 }
 

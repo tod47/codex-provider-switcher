@@ -24,6 +24,28 @@ struct MainView: View {
                 }
             }
 
+            if let providerStatus = model.providerStatus {
+                GroupBox("实际 provider 状态") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        statusRow("Provider", providerStatus.mode.displayName)
+                        statusRow("配置模型", providerStatus.configuredModel ?? "未读取")
+                        statusRow("Endpoint", providerStatus.endpoint ?? "未读取")
+                        statusRow("Codex 进程", providerStatus.processRunning ? "已运行" : "未运行")
+                        if let verification = providerStatus.verification {
+                            statusRow("验证", verification.state.displayName)
+                            if !verification.messages.isEmpty {
+                                Text(verification.messages.joined(separator: "；"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        } else {
+                            statusRow("验证", "尚未验证")
+                        }
+                    }
+                }
+            }
+
             VStack(spacing: 10) {
                 Button {
                     showingDeepSeekConfirmation = true
@@ -49,6 +71,11 @@ struct MainView: View {
                     Task { await model.runPreflight() }
                 }
                 .disabled(model.isBusy)
+
+                Button("测试当前请求") {
+                    Task { await model.verifyCurrentProvider() }
+                }
+                .disabled(model.isBusy || model.currentMode != .deepSeek)
 
                 Button("打开备份") {
                     model.revealSnapshots()
@@ -77,7 +104,7 @@ struct MainView: View {
             }
 
             Label(
-                "DeepSeek provider 为实验性接入；切换后旧会话能否继续取决于客户端和 provider 的兼容性。",
+                "右下角的 ChatGPT 模型列表不代表 Codex provider；请以这里的 provider、配置模型和验证结果为准。DeepSeek 为实验性接入。",
                 systemImage: "exclamationmark.triangle"
             )
             .font(.caption)
@@ -108,6 +135,19 @@ struct MainView: View {
         case .deepSeek: return .orange
         case .unknown: return .secondary
         }
+    }
+
+    @ViewBuilder
+    private func statusRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 74, alignment: .leading)
+            Text(value)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
     }
 }
 

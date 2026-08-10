@@ -4,15 +4,35 @@ import XCTest
 @testable import CodexProviderSwitcher
 
 final class ProcessControllerTests: XCTestCase {
-    func testProcessTableMatchesKnownCodexAppServerPath() throws {
+    func testProcessCommandRunnerDrainsLargeOutputBeforeWaitingForTheChild() throws {
+        let runner = FoundationProcessCommandRunner()
+        let output = try runner.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "yes x | head -c 200000"]
+        )
+
+        XCTAssertEqual(output.utf8.count, 200_000)
+    }
+
+    func testProcessTableMatchesChatGPTApplicationExecutablePath() throws {
         let runner = RecordingProcessCommandRunner(
-            output: "123 /Applications/ChatGPT.app/Contents/Resources/codex app-server --analytics-default-enabled\n"
+            output: "123 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --some-flag\n"
         )
         let table = ProcessTable(commandRunner: runner)
         let appURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
 
-        XCTAssertTrue(table.hasCodexAppServer(for: appURL))
+        XCTAssertTrue(table.hasChatGPTApplication(for: appURL))
         XCTAssertEqual(runner.arguments, ["-axo", "pid=,command="])
+    }
+
+    func testProcessTableDoesNotTreatAnOrphanedCodexAppServerAsChatGPT() throws {
+        let runner = RecordingProcessCommandRunner(
+            output: "123 /Applications/ChatGPT.app/Contents/Resources/codex app-server --listen stdio://\n"
+        )
+        let table = ProcessTable(commandRunner: runner)
+        let appURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
+
+        XCTAssertFalse(table.hasChatGPTApplication(for: appURL))
     }
 
     func testProcessTableIgnoresUnrelatedProcesses() throws {
@@ -22,7 +42,7 @@ final class ProcessControllerTests: XCTestCase {
         let table = ProcessTable(commandRunner: runner)
         let appURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
 
-        XCTAssertFalse(table.hasCodexAppServer(for: appURL))
+        XCTAssertFalse(table.hasChatGPTApplication(for: appURL))
     }
 }
 

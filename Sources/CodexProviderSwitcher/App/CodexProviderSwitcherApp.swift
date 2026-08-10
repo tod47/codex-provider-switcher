@@ -65,6 +65,10 @@ struct CodexProviderSwitcherApp: App {
                 Button("仅检查") {
                     Task { await model.runPreflight() }
                 }
+                Button("测试当前 DeepSeek 请求") {
+                    Task { await model.verifyCurrentProvider() }
+                }
+                .disabled(model.isBusy || model.currentMode != .deepSeek)
                 Button("退出") {
                     NSApplication.shared.terminate(nil)
                 }
@@ -115,7 +119,10 @@ struct CodexProviderSwitcherApp: App {
             processController: ChatGPTProcessController(
                 applicationURL: settings.chatGPTApplicationURL
             ),
-            lock: FileSwitchLock(url: supportRoot.appendingPathComponent("switch.lock"))
+            // The v2 lock is a kernel-managed file lock. The old directory lock
+            // can remain after an interrupted 0.1.0 transaction without blocking
+            // the recovered implementation.
+            lock: FileSwitchLock(url: supportRoot.appendingPathComponent("switch.lock.v2"))
         )
 
         return AppModel(

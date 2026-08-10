@@ -3,12 +3,14 @@ import Foundation
 struct SwitchManifest: Codable, Equatable, Sendable {
     var activeMode: ProviderMode
     var lastGPTSnapshot: ConfigSnapshot?
+    var lastVerification: ProviderVerification?
     var transactionID: String?
     var transactionPhase: String?
 
     static let initial = SwitchManifest(
         activeMode: .unknown,
         lastGPTSnapshot: nil,
+        lastVerification: nil,
         transactionID: nil,
         transactionPhase: nil
     )
