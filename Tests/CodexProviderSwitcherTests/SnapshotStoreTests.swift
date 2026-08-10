@@ -69,6 +69,7 @@ final class SnapshotStoreTests: XCTestCase {
         let manifest = SwitchManifest(
             activeMode: .deepSeek,
             lastGPTSnapshot: nil,
+            lastVerification: nil,
             transactionID: "transaction-1",
             transactionPhase: "launched"
         )

@@ -22,7 +22,11 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(result.targetMode, .deepSeek)
         XCTAssertNotNil(result.snapshotID)
-        XCTAssertEqual(context.process.events, ["terminate", "wait", "launch"])
+        XCTAssertEqual(result.status.mode, .deepSeek)
+        XCTAssertEqual(result.status.configuredModel, "deepseek-v4-flash")
+        XCTAssertEqual(result.status.verification?.state, .modelAvailable)
+        XCTAssertEqual(result.status.verification?.verifiedModel, "deepseek-v4-flash")
+        XCTAssertEqual(context.process.events, ["terminate", "wait", "launch", "ready"])
         XCTAssertTrue(try String(contentsOf: context.configURL).contains("deepseek-v4-flash"))
         XCTAssertEqual(context.process.launchEnvironments.last?["DEEPSEEK_API_KEY"], "test-deepseek-key")
         XCTAssertEqual(try context.manifestStore.load().activeMode, .deepSeek)
@@ -33,11 +37,67 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
         let context = try makeContext()
 
         _ = try await context.coordinator.switchTo(.deepSeek)
-        _ = try await context.coordinator.switchTo(.gpt)
+        let result = try await context.coordinator.switchTo(.gpt)
 
         XCTAssertEqual(try String(contentsOf: context.configURL), gptConfig)
         XCTAssertEqual(try context.manifestStore.load().activeMode, .gpt)
+        XCTAssertEqual(result.status.mode, .gpt)
+        XCTAssertEqual(result.status.configuredModel, "gpt-5.6-luna")
+        XCTAssertEqual(result.status.verification?.state, .configurationAndProcessVerified)
         XCTAssertNil(context.process.launchEnvironments.last?["DEEPSEEK_API_KEY"])
+    }
+
+    func testGPTSwitchRestoresSnapshotAfterDeepSeekModelWasChangedByChatGPT() async throws {
+        let context = try makeContext()
+
+        _ = try await context.coordinator.switchTo(.deepSeek)
+        let editedConfig = try String(contentsOf: context.configURL)
+            .replacingOccurrences(
+                of: "model = \"deepseek-v4-flash\"",
+                with: "model = \"gpt-5.6-terra\""
+            )
+        try editedConfig.write(to: context.configURL, atomically: true, encoding: .utf8)
+
+        let result = try await context.coordinator.switchTo(.gpt)
+
+        XCTAssertEqual(try String(contentsOf: context.configURL), gptConfig)
+        XCTAssertEqual(result.status.mode, .gpt)
+        XCTAssertEqual(result.status.configuredModel, "gpt-5.6-luna")
+        XCTAssertEqual(try context.manifestStore.load().activeMode, .gpt)
+    }
+
+    func testDeepSeekModelVerificationFailureRollsBackToGPT() async throws {
+        let context = try makeContext()
+        context.modelCatalogChecker.models = []
+
+        do {
+            _ = try await context.coordinator.switchTo(.deepSeek)
+            XCTFail("expected provider verification failure")
+        } catch let error as SwitchError {
+            guard case .rolledBack = error else {
+                return XCTFail("expected rollback error, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(try String(contentsOf: context.configURL), gptConfig)
+        XCTAssertEqual(try context.manifestStore.load().activeMode, .gpt)
+        XCTAssertEqual(
+            context.process.events,
+            ["terminate", "wait", "launch", "ready", "terminate", "wait", "launch", "ready"]
+        )
+    }
+
+    func testExplicitDeepSeekResponseVerificationRecordsTheActualModel() async throws {
+        let context = try makeContext()
+        _ = try await context.coordinator.switchTo(.deepSeek)
+
+        let status = try await context.coordinator.verifyCurrentProvider()
+
+        XCTAssertEqual(status.mode, .deepSeek)
+        XCTAssertEqual(status.verification?.state, .actualResponseVerified)
+        XCTAssertEqual(status.verification?.actualResponseModel, "deepseek-v4-flash")
+        XCTAssertEqual(try context.manifestStore.load().lastVerification?.actualResponseModel, "deepseek-v4-flash")
+        XCTAssertEqual(context.modelResponseTester.callCount, 1)
     }
 
     func testUnknownCurrentModeStopsBeforeWriting() async throws {
@@ -164,6 +224,8 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
         let baseSnapshotStore = SnapshotStore(rootURL: directory.appendingPathComponent("snapshots"))
         let failingSnapshotStore = FailingSnapshotStore(base: baseSnapshotStore)
         let manifestStore = ManifestStore(url: directory.appendingPathComponent("manifest.json"))
+        let modelCatalogChecker = RecordingModelCatalogChecker(models: ["deepseek-v4-flash"])
+        let modelResponseTester = RecordingModelResponseTester(model: "deepseek-v4-flash")
         let coordinator = SwitchTransactionCoordinator(
             settings: settings,
             transformer: CodexConfigTransformer(),
@@ -171,6 +233,8 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
             manifestStore: manifestStore,
             secretStore: secretStore,
             preflight: EndpointPreflight(probe: RecordingHTTPProbe(status: 200)),
+            modelCatalogChecker: modelCatalogChecker,
+            modelResponseTester: modelResponseTester,
             processController: process,
             lock: lock,
             clock: FixedClock(now: Date(timeIntervalSince1970: 1_754_678_400))
@@ -184,6 +248,8 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
             lock: lock,
             manifestStore: manifestStore,
             failingSnapshotStore: failingSnapshotStore,
+            modelCatalogChecker: modelCatalogChecker,
+            modelResponseTester: modelResponseTester,
             directory: directory
         )
     }
@@ -197,5 +263,7 @@ private struct TestContext {
     let lock: RecordingSwitchLock
     let manifestStore: ManifestStore
     let failingSnapshotStore: FailingSnapshotStore
+    let modelCatalogChecker: RecordingModelCatalogChecker
+    let modelResponseTester: RecordingModelResponseTester
     let directory: URL
 }

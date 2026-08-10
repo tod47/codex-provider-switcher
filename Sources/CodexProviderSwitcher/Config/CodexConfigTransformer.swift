@@ -7,6 +7,12 @@ enum ConfigTransformError: Error, Equatable {
     case invalidExistingConfig(String)
 }
 
+struct ProviderConfiguration: Equatable, Sendable {
+    let mode: ProviderMode
+    let model: String
+    let endpoint: String
+}
+
 struct CodexConfigTransformer {
     private let gptBaseURL: String
 
@@ -35,13 +41,42 @@ struct CodexConfigTransformer {
             return .gpt
         }
 
-        let isDeepSeek = parsed.singleValue(table: nil, key: "model") == settings.model
-            && baseURL == settings.baseURL.absoluteString
+        let isDeepSeek = deepSeekBaseURLMatches(baseURL, settings: settings)
             && wireAPI == settings.wireAPI
             && parsed.singleValue(table: "model_providers.custom", key: "env_key") == settings.environmentKey
             && requiresAuth == "false"
 
         return isDeepSeek ? .deepSeek : .unknown
+    }
+
+    private func deepSeekBaseURLMatches(_ candidate: String, settings: DeepSeekSettings) -> Bool {
+        normalizedProviderBaseURL(candidate) == normalizedProviderBaseURL(settings.baseURL.absoluteString)
+    }
+
+    private func normalizedProviderBaseURL(_ value: String) -> String {
+        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while normalized.hasSuffix("/") {
+            normalized.removeLast()
+        }
+        if normalized.hasSuffix("/v1") {
+            normalized.removeLast(3)
+        }
+        return normalized
+    }
+
+    func configuration(in text: String, settings: DeepSeekSettings) -> ProviderConfiguration? {
+        guard let parsed = try? ParsedConfig(text: text),
+              let model = parsed.singleValue(table: nil, key: "model"),
+              let baseURL = parsed.singleValue(table: "model_providers.custom", key: "base_url")
+        else {
+            return nil
+        }
+
+        return ProviderConfiguration(
+            mode: detectMode(in: text, settings: settings),
+            model: model,
+            endpoint: baseURL
+        )
     }
 
     func makeDeepSeekConfig(from gptConfig: String, settings: DeepSeekSettings) throws -> String {

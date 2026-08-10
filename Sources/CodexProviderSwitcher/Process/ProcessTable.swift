@@ -13,9 +13,9 @@ struct FoundationProcessCommandRunner: ProcessCommandRunning {
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
-        process.waitUntilExit()
 
         let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         guard let text = String(data: output, encoding: .utf8) else {
             return ""
         }
@@ -35,9 +35,9 @@ struct ProcessTable: Sendable {
         self.psURL = psURL
     }
 
-    func hasCodexAppServer(for applicationURL: URL) -> Bool {
+    func hasChatGPTApplication(for applicationURL: URL) -> Bool {
         let expectedExecutable = applicationURL
-            .appendingPathComponent("Contents/Resources/codex")
+            .appendingPathComponent("Contents/MacOS/ChatGPT")
             .path
         guard let output = try? commandRunner.run(
             executable: psURL,
@@ -48,7 +48,7 @@ struct ProcessTable: Sendable {
 
         return output.split(whereSeparator: \.isNewline).contains { line in
             let text = String(line)
-            return text.contains(expectedExecutable) && text.contains(" app-server")
+            return text.contains(expectedExecutable)
         }
     }
 }

@@ -99,13 +99,16 @@ struct LaunchIntentParser {
 
 protocol ProviderSwitching: Sendable {
     func currentMode() throws -> ProviderMode
+    func currentStatus() throws -> ProviderStatus
     func switchTo(_ targetMode: ProviderMode) async throws -> SwitchResult
+    func verifyCurrentProvider() async throws -> ProviderStatus
     func checkPreflight() async throws -> EndpointPreflightReport
 }
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var currentMode: ProviderMode = .unknown
+    @Published private(set) var providerStatus: ProviderStatus?
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = ""
     @Published private(set) var lastSnapshotURL: URL?
@@ -138,13 +141,17 @@ final class AppModel: ObservableObject {
         self.keychainService = keychainService
         self.keychainAccount = keychainAccount
         self.openURL = openURL
-        self.currentMode = (try? coordinator.currentMode()) ?? .unknown
+        let initialStatus = try? coordinator.currentStatus()
+        self.providerStatus = initialStatus
+        self.currentMode = initialStatus?.mode ?? (try? coordinator.currentMode()) ?? .unknown
     }
 
     func refresh() async {
         do {
-            currentMode = try coordinator.currentMode()
-            statusMessage = "当前模式：(currentMode.displayName)"
+            let status = try coordinator.currentStatus()
+            providerStatus = status
+            currentMode = status.mode
+            statusMessage = status.summary
         } catch {
             statusMessage = "无法读取当前配置，请检查 Codex 配置文件。"
         }
@@ -156,6 +163,24 @@ final class AppModel: ObservableObject {
 
     func switchToGPT() async {
         await switchTo(.gpt)
+    }
+
+    func verifyCurrentProvider() async {
+        guard !isBusy else { return }
+        isBusy = true
+        statusMessage = "正在发送最小测试请求，确认实际响应模型…"
+        defer { isBusy = false }
+
+        do {
+            let status = try await coordinator.verifyCurrentProvider()
+            providerStatus = status
+            currentMode = status.mode
+            statusMessage = status.summary
+        } catch let error as SwitchError {
+            statusMessage = error.statusMessage
+        } catch {
+            statusMessage = "实际 provider 测试失败，配置未修改。"
+        }
     }
 
     func runPreflight() async {
@@ -222,12 +247,13 @@ final class AppModel: ObservableObject {
         do {
             let result = try await coordinator.switchTo(targetMode)
             currentMode = result.targetMode
+            providerStatus = result.status
             if let snapshotID = result.snapshotID {
                 lastSnapshotURL = snapshotsRootURL
                     .appendingPathComponent(snapshotID, isDirectory: true)
                     .appendingPathComponent("config.toml")
             }
-            statusMessage = "已切换到 \(targetMode.displayName)，ChatGPT 正在重新启动。"
+            statusMessage = result.status.summary
         } catch let error as SwitchError {
             if targetMode == .deepSeek, case let .preflightFailed(messages) = error,
                messages.contains("DeepSeek API Key is missing") {
@@ -249,6 +275,18 @@ extension ProviderMode {
         case .deepSeek: return "DeepSeek（实验性）"
         case .unknown: return "未知"
         }
+    }
+}
+
+private extension ProviderStatus {
+    var summary: String {
+        let modelText = configuredModel.map { "，模型：\($0)" } ?? ""
+        let processText = processRunning ? "Codex 已运行" : "Codex 尚未运行"
+        var verificationText = verification?.messages.joined(separator: "；") ?? "尚未验证"
+        if let actualResponseModel = verification?.actualResponseModel {
+            verificationText += "；实际响应模型：\(actualResponseModel)"
+        }
+        return "当前 provider：\(mode.displayName)\(modelText)。\(processText)。\(verificationText)。"
     }
 }
 
@@ -283,6 +321,12 @@ private extension SwitchError {
             return "配置写入失败，已保持原配置并尝试恢复 ChatGPT。"
         case .launchFailed:
             return "ChatGPT 启动失败，已尝试恢复原 provider。"
+        case .chatGPTDidNotStart:
+            return "ChatGPT 未能在超时内启动，已尝试恢复原 provider。"
+        case .configurationVerificationFailed:
+            return "重启后配置与目标 provider 不一致，已尝试恢复原 provider。"
+        case let .providerVerificationFailed(messages):
+            return "provider 验证未通过：\(messages.joined(separator: "；"))，已尝试恢复原 provider。"
         case .rolledBack:
             return "切换失败，已恢复原配置并重启 ChatGPT。"
         }

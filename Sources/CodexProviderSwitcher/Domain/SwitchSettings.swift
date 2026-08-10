@@ -80,7 +80,7 @@ struct SwitchSettings: Codable, Equatable, Sendable {
     ) throws -> SwitchSettings {
         let deepSeek = try DeepSeekSettings(
             model: "deepseek-v4-flash",
-            baseURL: URL(string: "https://api.deepseek.com/v1")!
+            baseURL: URL(string: "https://api.deepseek.com")!
         )
         return try SwitchSettings(
             codexHome: homeDirectory.appendingPathComponent(".codex"),

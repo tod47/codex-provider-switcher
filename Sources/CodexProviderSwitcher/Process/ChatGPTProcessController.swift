@@ -12,6 +12,7 @@ protocol ChatGPTProcessControlling: Sendable {
     func requestTermination() async throws
     func waitUntilStopped(timeout: Duration) async -> Bool
     func launch(environment: [String: String]) throws
+    func waitUntilRunning(timeout: Duration) async -> Bool
 }
 
 struct ChatGPTProcessController: ChatGPTProcessControlling {
@@ -33,7 +34,7 @@ struct ChatGPTProcessController: ChatGPTProcessControlling {
     }
 
     func isRunning() -> Bool {
-        !runningApplications().isEmpty || processTable.hasCodexAppServer(for: applicationURL)
+        !runningApplications().isEmpty || processTable.hasChatGPTApplication(for: applicationURL)
     }
 
     func requestTermination() async throws {
@@ -72,6 +73,17 @@ struct ChatGPTProcessController: ChatGPTProcessControlling {
         } catch {
             throw ChatGPTProcessError.launchFailed(String(describing: error))
         }
+    }
+
+    func waitUntilRunning(timeout: Duration) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout.timeInterval)
+        repeat {
+            if isRunning() {
+                return true
+            }
+            await sleeper.sleep(for: .milliseconds(100))
+        } while Date() < deadline
+        return isRunning()
     }
 
     private func runningApplications() -> [NSRunningApplication] {

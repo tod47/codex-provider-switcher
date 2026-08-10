@@ -19,6 +19,7 @@ current_user_home="$(/usr/bin/id -P "$(/usr/bin/id -un)" | /usr/bin/awk -F: '{pr
 applications_directory="$current_user_home/Applications"
 desktop_directory="$current_user_home/Desktop"
 main_target="$applications_directory/Codex Provider Switcher.app"
+main_desktop_target="$desktop_directory/Codex Provider Switcher.app"
 deepseek_target="$desktop_directory/Codex 切到 DeepSeek.app"
 gpt_target="$desktop_directory/Codex 切回 GPT.app"
 
@@ -55,6 +56,7 @@ check_target() {
 }
 
 check_target "$main_target"
+check_target "$main_desktop_target"
 check_target "$deepseek_target"
 check_target "$gpt_target"
 
@@ -70,10 +72,12 @@ install_bundle() {
 }
 
 install_bundle "$main_source" "$main_target"
+install_bundle "$main_source" "$main_desktop_target"
 install_bundle "$deepseek_source" "$deepseek_target"
 install_bundle "$gpt_source" "$gpt_target"
 
 echo "Installed main app: $main_target"
+echo "Installed desktop main app: $main_desktop_target"
 echo "Installed DeepSeek launcher: $deepseek_target"
 echo "Installed GPT launcher: $gpt_target"
 echo "Existing desktop .command files were not touched."

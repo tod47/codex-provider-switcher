@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 protocol ConfigSnapshotStoring: AnyObject {
@@ -19,7 +20,7 @@ enum SwitchLockError: Error, Equatable {
 final class FileSwitchLock: SwitchLocking, @unchecked Sendable {
     private let url: URL
     private let fileManager: FileManager
-    private var held = false
+    private var fileDescriptor: Int32 = -1
 
     init(url: URL, fileManager: FileManager = .default) {
         self.url = url
@@ -27,7 +28,7 @@ final class FileSwitchLock: SwitchLocking, @unchecked Sendable {
     }
 
     func acquire() throws {
-        guard !held else {
+        guard fileDescriptor == -1 else {
             throw SwitchLockError.alreadyHeld
         }
 
@@ -36,23 +37,41 @@ final class FileSwitchLock: SwitchLocking, @unchecked Sendable {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
-            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-            held = true
         } catch {
-            if fileManager.fileExists(atPath: url.path) {
+            throw SwitchLockError.failed
+        }
+
+        let descriptor = open(url.path, O_CREAT | O_RDWR, mode_t(0o600))
+        guard descriptor >= 0 else {
+            throw SwitchLockError.failed
+        }
+
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let errorCode = errno
+            close(descriptor)
+            if errorCode == EWOULDBLOCK || errorCode == EAGAIN {
                 throw SwitchLockError.alreadyHeld
             }
             throw SwitchLockError.failed
         }
+
+        guard fchmod(descriptor, mode_t(0o600)) == 0 else {
+            flock(descriptor, LOCK_UN)
+            close(descriptor)
+            throw SwitchLockError.failed
+        }
+
+        fileDescriptor = descriptor
     }
 
     func release() {
-        guard held else {
+        guard fileDescriptor >= 0 else {
             return
         }
-        try? fileManager.removeItem(at: url)
-        held = false
+        let descriptor = fileDescriptor
+        fileDescriptor = -1
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
     }
 
     deinit {
@@ -63,6 +82,17 @@ final class FileSwitchLock: SwitchLocking, @unchecked Sendable {
 struct SwitchResult: Equatable, Sendable {
     let targetMode: ProviderMode
     let snapshotID: String?
+    let status: ProviderStatus
+
+    init(
+        targetMode: ProviderMode,
+        snapshotID: String?,
+        status: ProviderStatus? = nil
+    ) {
+        self.targetMode = targetMode
+        self.snapshotID = snapshotID
+        self.status = status ?? .unverified(mode: targetMode)
+    }
 }
 
 enum SwitchError: Error, Equatable {
@@ -80,6 +110,9 @@ enum SwitchError: Error, Equatable {
     case chatGPTDidNotStop
     case configurationWriteFailed
     case launchFailed
+    case chatGPTDidNotStart
+    case configurationVerificationFailed
+    case providerVerificationFailed([String])
     case rolledBack
 }
 
@@ -90,6 +123,8 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
     private let manifestStore: ManifestStore
     private let secretStore: any SecretStore
     private let preflight: EndpointPreflight
+    private let modelCatalogChecker: any DeepSeekModelCatalogChecking
+    private let modelResponseTester: any DeepSeekModelResponseTesting
     private let processController: any ChatGPTProcessControlling
     private let lock: any SwitchLocking
     private let clock: any Clock
@@ -101,6 +136,8 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
         manifestStore: ManifestStore,
         secretStore: any SecretStore,
         preflight: EndpointPreflight,
+        modelCatalogChecker: any DeepSeekModelCatalogChecking = URLSessionDeepSeekModelCatalogChecker(),
+        modelResponseTester: any DeepSeekModelResponseTesting = URLSessionDeepSeekModelResponseTester(),
         processController: any ChatGPTProcessControlling,
         lock: any SwitchLocking,
         clock: any Clock = SystemClock()
@@ -111,6 +148,8 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
         self.manifestStore = manifestStore
         self.secretStore = secretStore
         self.preflight = preflight
+        self.modelCatalogChecker = modelCatalogChecker
+        self.modelResponseTester = modelResponseTester
         self.processController = processController
         self.lock = lock
         self.clock = clock
@@ -119,6 +158,107 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
     func currentMode() throws -> ProviderMode {
         let config = try readConfig()
         return transformer.detectMode(in: config, settings: settings.deepSeek)
+    }
+
+    func currentStatus() throws -> ProviderStatus {
+        let config = try readConfig()
+        guard let configuration = transformer.configuration(in: config, settings: settings.deepSeek) else {
+            throw SwitchError.configurationReadFailed
+        }
+
+        let manifest = try loadManifest()
+        let processRunning = processController.isRunning()
+        let persistedVerification: ProviderVerification?
+        if let candidate = manifest.lastVerification,
+           candidate.verifiedModel == configuration.model,
+           candidate.verifiedEndpoint == configuration.endpoint {
+            persistedVerification = candidate
+        } else {
+            persistedVerification = nil
+        }
+        let verification = persistedVerification ?? {
+            guard configuration.mode == .gpt, processRunning else {
+                return nil
+            }
+            return ProviderVerification(
+                state: .configurationAndProcessVerified,
+                verifiedModel: configuration.model,
+                verifiedEndpoint: configuration.endpoint,
+                messages: [
+                    "GPT 配置已加载",
+                    "Codex app-server 已运行"
+                ]
+            )
+        }()
+
+        return ProviderStatus(
+            mode: configuration.mode,
+            configuredModel: configuration.model,
+            endpoint: configuration.endpoint,
+            processRunning: processRunning,
+            verification: verification
+        )
+    }
+
+    func verifyCurrentProvider() async throws -> ProviderStatus {
+        do {
+            try lock.acquire()
+        } catch let error as SwitchLockError {
+            if error == .alreadyHeld {
+                throw SwitchError.alreadyRunning
+            }
+            throw SwitchError.lockFailed
+        } catch {
+            throw SwitchError.lockFailed
+        }
+        defer { lock.release() }
+
+        let current = try currentStatus()
+        guard current.mode == .deepSeek else {
+            return current
+        }
+        guard let secret = try requiredDeepSeekSecret() else {
+            throw SwitchError.providerVerificationFailed(["DeepSeek API Key is missing"])
+        }
+
+        do {
+            let actualModel = try await modelResponseTester.sendMinimalTest(
+                baseURL: URL(string: current.endpoint ?? "") ?? settings.deepSeek.baseURL,
+                model: current.configuredModel ?? settings.deepSeek.model,
+                apiKey: secret,
+                timeout: .seconds(15)
+            )
+            let verification = ProviderVerification(
+                state: .actualResponseVerified,
+                verifiedModel: current.configuredModel,
+                verifiedEndpoint: current.endpoint,
+                actualResponseModel: actualModel,
+                messages: [
+                    "DeepSeek endpoint 已返回实际响应",
+                    "实际响应模型：\(actualModel)"
+                ]
+            )
+            var manifest = try loadManifest()
+            manifest.lastVerification = verification
+            try saveManifest(manifest)
+            return ProviderStatus(
+                mode: current.mode,
+                configuredModel: current.configuredModel,
+                endpoint: current.endpoint,
+                processRunning: current.processRunning,
+                verification: verification
+            )
+        } catch let error as SwitchError {
+            throw error
+        } catch let error as DeepSeekResponseTestError {
+            throw SwitchError.providerVerificationFailed([
+                responseTestMessage(for: error)
+            ])
+        } catch {
+            throw SwitchError.providerVerificationFailed([
+                "实际 DeepSeek 请求失败"
+            ])
+        }
     }
 
     func checkPreflight() async throws -> EndpointPreflightReport {
@@ -152,7 +292,11 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
             throw SwitchError.unknownCurrentMode
         }
         if currentMode == targetMode {
-            return SwitchResult(targetMode: targetMode, snapshotID: nil)
+            return SwitchResult(
+                targetMode: targetMode,
+                snapshotID: nil,
+                status: try currentStatus()
+            )
         }
 
         var manifest = try loadManifest()
@@ -247,8 +391,20 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
                 throw SwitchError.launchFailed
             }
 
+            guard await processController.waitUntilRunning(
+                timeout: .seconds(settings.launchTimeoutSeconds)
+            ) else {
+                throw SwitchError.chatGPTDidNotStart
+            }
+
+            let status = try await verifyActiveTarget(
+                targetMode: targetMode,
+                deepSeekSecret: deepSeekSecret
+            )
+
             manifest.activeMode = targetMode
             manifest.transactionPhase = "completed"
+            manifest.lastVerification = status.verification
             if targetMode == .gpt {
                 manifest.lastGPTSnapshot = nil
             }
@@ -256,7 +412,8 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
 
             return SwitchResult(
                 targetMode: targetMode,
-                snapshotID: rollbackSnapshot?.id
+                snapshotID: rollbackSnapshot?.id,
+                status: status
             )
         } catch let error as SwitchError {
             guard processStopped || configReplaced else {
@@ -359,6 +516,110 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
         }
     }
 
+    private func verifyActiveTarget(
+        targetMode: ProviderMode,
+        deepSeekSecret: String?
+    ) async throws -> ProviderStatus {
+        guard processController.isRunning() else {
+            throw SwitchError.chatGPTDidNotStart
+        }
+
+        let config = try readConfig()
+        guard let configuration = transformer.configuration(in: config, settings: settings.deepSeek),
+              configuration.mode == targetMode
+        else {
+            throw SwitchError.configurationVerificationFailed
+        }
+
+        switch targetMode {
+        case .gpt:
+            let verification = ProviderVerification(
+                state: .configurationAndProcessVerified,
+                verifiedModel: configuration.model,
+                verifiedEndpoint: configuration.endpoint,
+                messages: [
+                    "GPT 配置已恢复",
+                    "Codex app-server 已启动"
+                ]
+            )
+            return ProviderStatus(
+                mode: targetMode,
+                configuredModel: configuration.model,
+                endpoint: configuration.endpoint,
+                processRunning: true,
+                verification: verification
+            )
+        case .deepSeek:
+            guard let deepSeekSecret else {
+                throw SwitchError.providerVerificationFailed(["DeepSeek API Key is missing"])
+            }
+
+            do {
+                let models = try await modelCatalogChecker.listModels(
+                    baseURL: URL(string: configuration.endpoint) ?? settings.deepSeek.baseURL,
+                    apiKey: deepSeekSecret,
+                    timeout: .seconds(5)
+                )
+                guard models.contains(settings.deepSeek.model) else {
+                    throw SwitchError.providerVerificationFailed([
+                        "DeepSeek 模型目录中没有 \(settings.deepSeek.model)"
+                    ])
+                }
+
+                let verification = ProviderVerification(
+                    state: .modelAvailable,
+                    verifiedModel: settings.deepSeek.model,
+                    verifiedEndpoint: configuration.endpoint,
+                    messages: [
+                        "DeepSeek endpoint 已连接",
+                        "模型目录已确认 \(settings.deepSeek.model) 可用"
+                    ]
+                )
+                return ProviderStatus(
+                    mode: targetMode,
+                    configuredModel: configuration.model,
+                    endpoint: configuration.endpoint,
+                    processRunning: true,
+                    verification: verification
+                )
+            } catch let error as SwitchError {
+                throw error
+            } catch let error as DeepSeekModelCatalogError {
+                throw SwitchError.providerVerificationFailed([
+                    modelCatalogMessage(for: error)
+                ])
+            } catch {
+                throw SwitchError.providerVerificationFailed([
+                    "无法读取 DeepSeek 模型目录"
+                ])
+            }
+        case .unknown:
+            throw SwitchError.configurationVerificationFailed
+        }
+    }
+
+    private func modelCatalogMessage(for error: DeepSeekModelCatalogError) -> String {
+        switch error {
+        case .nonHTTPResponse:
+            return "DeepSeek 模型目录返回了非 HTTP 响应"
+        case let .unexpectedStatus(status):
+            return "DeepSeek 模型目录返回 HTTP \(status)"
+        case .invalidPayload:
+            return "DeepSeek 模型目录响应格式无法识别"
+        }
+    }
+
+    private func responseTestMessage(for error: DeepSeekResponseTestError) -> String {
+        switch error {
+        case .nonHTTPResponse:
+            return "DeepSeek 实际测试返回了非 HTTP 响应"
+        case let .unexpectedStatus(status):
+            return "DeepSeek 实际测试返回 HTTP \(status)"
+        case .invalidPayload:
+            return "DeepSeek 实际测试响应中没有可识别的 model 字段"
+        }
+    }
+
     private func environment(
         for mode: ProviderMode,
         deepSeekSecret: String?
@@ -396,12 +657,16 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
                 )
             }
             try? processController.launch(environment: previousEnvironment)
+            _ = await processController.waitUntilRunning(
+                timeout: .seconds(settings.launchTimeoutSeconds)
+            )
         }
 
         var rollbackManifest = manifest
         rollbackManifest.activeMode = previousMode
         rollbackManifest.transactionID = transactionID
         rollbackManifest.transactionPhase = "rolledBack"
+        rollbackManifest.lastVerification = manifest.lastVerification
         if previousMode == .gpt, let rollbackSnapshot {
             rollbackManifest.lastGPTSnapshot = rollbackSnapshot
         }

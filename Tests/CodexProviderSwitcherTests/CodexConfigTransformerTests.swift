@@ -61,6 +61,38 @@ final class CodexConfigTransformerTests: XCTestCase {
         )
     }
 
+    func testModeDetectionRecognizesDeepSeekWhenChatGPTChangedOnlyTheModel() throws {
+        let transformer = CodexConfigTransformer()
+        let deepSeek = try transformer.makeDeepSeekConfig(from: fixture, settings: deepSeekSettings)
+        let editedByChatGPT = deepSeek.replacingOccurrences(
+            of: "model = \"deepseek-v4-flash\"",
+            with: "model = \"gpt-5.6-terra\""
+        )
+
+        XCTAssertEqual(
+            transformer.detectMode(in: editedByChatGPT, settings: deepSeekSettings),
+            .deepSeek
+        )
+    }
+
+    func testModeDetectionAcceptsLegacyDeepSeekV1BaseURL() throws {
+        let transformer = CodexConfigTransformer()
+        let currentSettings = try DeepSeekSettings(
+            model: "deepseek-v4-flash",
+            baseURL: URL(string: "https://api.deepseek.com")!
+        )
+        let legacyConfig = try transformer.makeDeepSeekConfig(from: fixture, settings: currentSettings)
+            .replacingOccurrences(
+                of: "base_url = \"https://api.deepseek.com\"",
+                with: "base_url = \"https://api.deepseek.com/v1\""
+            )
+
+        XCTAssertEqual(
+            transformer.detectMode(in: legacyConfig, settings: currentSettings),
+            .deepSeek
+        )
+    }
+
     func testTransformerRejectsMissingCustomProviderTable() {
         let transformer = CodexConfigTransformer()
         let invalid = fixture.replacingOccurrences(of: "[model_providers.custom]", with: "[model_providers.other]")
