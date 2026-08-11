@@ -8,9 +8,9 @@ Codex Provider Switcher 是一个 SwiftPM macOS executable。它把 UI、事务�
 - Config：对 provider 相关的 TOML 行做窄范围转换；SnapshotStore 保存完整 config.toml 的哈希快照；ManifestStore 用原子 JSON 写入事务状态。
 - Security：KeychainSecretStore 使用 macOS Generic Password 保存 API Key；EnvFileImporter 只提供一次性导入能力，且不把密钥写入配置。
 - Provider：EndpointPreflight 检查 HTTP/HTTPS endpoint、responses wire API 和凭据是否存在，并用 HEAD 做轻量可达性探测；DeepSeekModelCatalogChecking 在重启后用鉴权的 `GET /models` 验证目标模型是否存在；DeepSeekModelResponseTesting 只在用户点击测试按钮后发送最小 Responses 请求并读取返回的实际 `model`。
-- Process：ChatGPTProcessController 识别已运行的 ChatGPT/Codex app-server，优雅退出、等待停止，再以受控环境重新启动并等待进程出现。
+- Process：ChatGPTProcessController 识别已运行的 ChatGPT/Codex app-server，优雅退出、等待停止，再以受控环境重新启动并等待进程出现；ConfigDirectoryWatcher 监视 Codex 配置目录的文件事件。
 - Switch：SwitchTransactionCoordinator 串联锁、快照、停止、原子写入、启动、配置/进程验证、完成和回滚。
-- App：SwiftUI 主窗口、MenuBarExtra、钥匙串输入 sheet 和一次性命令行 intent。
+- App：SwiftUI 主窗口、MenuBarExtra、钥匙串输入 sheet、常驻 DeepSeek 模型守护器和命令行 intent。
 - scripts：生成主 app 和两个无密钥桌面包装器，并在安装前检查目标 bundle identifier。
 
 ## 正常事务
@@ -34,6 +34,14 @@ Codex Provider Switcher 是一个 SwiftPM macOS executable。它把 UI、事务�
 
 如果 ChatGPT 未能停止，事务在原子替换前终止；原配置和历史 sentinel 应保持不变。锁使用 app-support 下的内核级文件锁，避免两个切换同时进行，并由操作系统在切换器进程异常退出时自动释放。当前版本使用 `switch.lock.v2`；早期版本遗留的 `switch.lock` 目录不会阻塞新实现。
 
+## DeepSeek 模型守护
+
+`CodexConfigTransformer` 会把 provider 识别和根级模型修复分开处理。只有当 `model_provider = "custom"` 下的 `base_url`、`wire_api`、`env_key` 和 `requires_openai_auth` 共同匹配 DeepSeek 时，守护器才允许修复根级 `model`；它不会把 `custom` 当作模型名，也不会处理 GPT 或未知 provider。
+
+`SwitchTransactionCoordinator.repairDeepSeekModelIfNeeded()` 复用 `switch.lock.v2`，读取当前配置后调用纯文本 transformer，并通过 `ConfigSnapshotStoring.atomicallyReplace` 写回。模型修复不创建快照、不启动或退出 ChatGPT、不读取 API Key；如果锁正在被切换事务占用，守护器把这次事件当作预期的暂时无操作，并由上层做有界重试。manifest 中的旧验证结果会在实际修复后清除，避免把旧模型验证误显示为当前结果。
+
+`ConfigDirectoryWatcher` 只打开 `.codex` 目录的事件描述符，不打开 `state_5.sqlite`、WAL/SHM、会话 JSONL 或历史桶。`DeepSeekModelGuard` 在主 actor 上负责初次扫描、250 ms 去抖、有限重试和 UI 状态发布。交互式启动自动常驻；成功的 `--mode=deepseek` 运行也会在完成切换后留在菜单栏；`--check` 仍在显示结果后退出。
+
 ## 数据边界
 
 应用只写自己的 Application Support 子目录和当前 provider 配置文件。它不打开、不更新、不迁移：
@@ -51,13 +59,15 @@ API Key 只通过 Keychain 在运行时读取，并在启动 ChatGPT 时放入�
 
 主 executable 支持：
 
-- 无参数：交互式窗口和菜单栏；
-- --mode=deepseek：执行一次 DeepSeek 切换；
-- --mode=gpt：执行一次 GPT 恢复；
+- 无参数：交互式窗口和菜单栏，并在 DeepSeek 模式下启动模型守护；
+- --mode=deepseek：执行一次 DeepSeek 切换，成功后保持菜单栏常驻并启动模型守护；
+- --mode=gpt：执行一次 GPT 恢复，成功后保持菜单栏常驻但不运行 DeepSeek 模型守护；
 - --check：执行一次预检；
 - --codex-home <path> 和 --chatgpt-app <path>：为测试和其他用户注入路径。
 
 桌面包装器只保存模式参数。包装器优先寻找 staging 目录旁的主 app，安装后再寻找当前用户 Applications 目录中的主 app，因此不会把凭据复制进桌面文件。
+
+守护器只保护后续本地配置读取。已经提交的请求、服务端响应、客户端内部缓存或历史会话中的既有请求不会被重写；这也是它不访问历史数据的有意边界。
 
 ## 可移植性边界
 
