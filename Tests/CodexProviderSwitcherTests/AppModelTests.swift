@@ -52,6 +52,31 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.currentMode, .gpt)
     }
 
+    func testModelGuardStartsPublishesRepairStateAndStops() async throws {
+        let directory = try makeTemporaryDirectory()
+        let coordinator = RecordingProviderSwitching(currentMode: .deepSeek)
+        let modelGuard = RecordingDeepSeekModelGuard()
+        let model = AppModel(
+            coordinator: coordinator,
+            snapshotsRootURL: directory.appendingPathComponent("snapshots"),
+            logsURL: directory.appendingPathComponent("logs"),
+            modelGuard: modelGuard
+        )
+
+        XCTAssertEqual(modelGuard.startCount, 1)
+        modelGuard.emit(.repaired(model: "deepseek-v4-flash"))
+        await Task.yield()
+
+        XCTAssertEqual(model.modelGuardState, .repaired(model: "deepseek-v4-flash"))
+        XCTAssertTrue(model.statusMessage.contains("deepseek-v4-flash"))
+        XCTAssertTrue(model.modelGuardSummary.contains("deepseek-v4-flash"))
+
+        model.stopModelGuard()
+
+        XCTAssertEqual(modelGuard.stopCount, 1)
+        XCTAssertEqual(model.modelGuardState, .stopped)
+    }
+
     func testCheckOnlyCallsPreflightAndNeverSwitches() async throws {
         let directory = try makeTemporaryDirectory()
         let coordinator = RecordingProviderSwitching(
@@ -157,5 +182,30 @@ final class RecordingProviderSwitching: ProviderSwitching, @unchecked Sendable {
     func checkPreflight() async throws -> EndpointPreflightReport {
         preflightCalls += 1
         return preflightReport
+    }
+}
+
+@MainActor
+final class RecordingDeepSeekModelGuard: DeepSeekModelGuarding {
+    private(set) var state: DeepSeekModelGuardState = .stopped
+    var onStateChange: ((DeepSeekModelGuardState) -> Void)?
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+
+    func start() {
+        startCount += 1
+        state = .monitoring
+        onStateChange?(state)
+    }
+
+    func stop() {
+        stopCount += 1
+        state = .stopped
+        onStateChange?(state)
+    }
+
+    func emit(_ state: DeepSeekModelGuardState) {
+        self.state = state
+        onStateChange?(state)
     }
 }

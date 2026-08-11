@@ -46,34 +46,10 @@ struct CodexProviderSwitcherApp: App {
             "Codex Provider Switcher",
             systemImage: "arrow.triangle.2.circlepath"
         ) {
-            if isInteractive {
-                Button("切到 DeepSeek并重启 ChatGPT") {
-                    Task { await model.switchToDeepSeek() }
-                }
-                .disabled(model.isBusy || model.currentMode == .deepSeek)
-
-                Button("切回 GPT并重启 ChatGPT") {
-                    Task { await model.switchToGPT() }
-                }
-                .disabled(model.isBusy || model.currentMode == .gpt)
-
-                Divider()
-
-                Button("打开主窗口") {
-                    WindowRouter.shared.openMainWindow()
-                }
-                Button("仅检查") {
-                    Task { await model.runPreflight() }
-                }
-                Button("测试当前 DeepSeek 请求") {
-                    Task { await model.verifyCurrentProvider() }
-                }
-                .disabled(model.isBusy || model.currentMode != .deepSeek)
-                Button("退出") {
-                    NSApplication.shared.terminate(nil)
-                }
+            if case .checkOnly = launchConfiguration.intent {
+                Text("正在执行一次性检查…")
             } else {
-                Text("正在执行一次性 provider 操作…")
+                residentMenuContent
             }
         }
     }
@@ -125,14 +101,60 @@ struct CodexProviderSwitcherApp: App {
             lock: FileSwitchLock(url: supportRoot.appendingPathComponent("switch.lock.v2"))
         )
 
+        let modelGuard = DeepSeekModelGuard(
+            watcher: ConfigDirectoryWatcher(directoryURL: settings.codexHome),
+            repairer: coordinator
+        )
+        let automaticallyStartModelGuard: Bool
+        if case .interactive = configuration.intent {
+            automaticallyStartModelGuard = true
+        } else {
+            automaticallyStartModelGuard = false
+        }
+
         return AppModel(
             coordinator: coordinator,
             snapshotsRootURL: snapshotsRoot,
             logsURL: logsURL,
             secretStore: secretStore,
             keychainService: settings.keychainService,
-            keychainAccount: settings.keychainAccount
+            keychainAccount: settings.keychainAccount,
+            modelGuard: modelGuard,
+            automaticallyStartModelGuard: automaticallyStartModelGuard
         )
+    }
+
+    @ViewBuilder
+    private var residentMenuContent: some View {
+        Text(model.modelGuardSummary)
+            .font(.caption)
+
+        Button("切到 DeepSeek并重启 ChatGPT") {
+            Task { await model.switchToDeepSeek() }
+        }
+        .disabled(model.isBusy || model.currentMode == .deepSeek)
+
+        Button("切回 GPT并重启 ChatGPT") {
+            Task { await model.switchToGPT() }
+        }
+        .disabled(model.isBusy || model.currentMode == .gpt)
+
+        Divider()
+
+        Button("打开主窗口") {
+            WindowRouter.shared.openMainWindow()
+        }
+        Button("仅检查") {
+            Task { await model.runPreflight() }
+        }
+        Button("测试当前 DeepSeek 请求") {
+            Task { await model.verifyCurrentProvider() }
+        }
+        .disabled(model.isBusy || model.currentMode != .deepSeek)
+        Button("退出") {
+            model.stopModelGuard()
+            NSApplication.shared.terminate(nil)
+        }
     }
 }
 
@@ -151,10 +173,14 @@ private struct IntentRunnerView: View {
                 case .interactive:
                     break
                 case .switchTo(let mode):
+                    let succeeded: Bool
                     if mode == .deepSeek {
-                        await model.switchToDeepSeek()
+                        succeeded = await model.switchToDeepSeek()
                     } else {
-                        await model.switchToGPT()
+                        succeeded = await model.switchToGPT()
+                    }
+                    if succeeded, mode == .deepSeek {
+                        model.startModelGuard()
                     }
                 case .checkOnly:
                     await model.runPreflight()
@@ -166,7 +192,13 @@ private struct IntentRunnerView: View {
                 alert.alertStyle = .informational
                 alert.addButton(withTitle: "好")
                 alert.runModal()
-                NSApplication.shared.terminate(nil)
+
+                if case .checkOnly = intent {
+                    NSApplication.shared.terminate(nil)
+                } else {
+                    _ = NSApplication.shared.setActivationPolicy(.accessory)
+                    NSApplication.shared.hide(nil)
+                }
             }
     }
 }

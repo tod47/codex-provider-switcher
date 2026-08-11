@@ -112,10 +112,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = ""
     @Published private(set) var lastSnapshotURL: URL?
+    @Published private(set) var modelGuardState: DeepSeekModelGuardState = .stopped
     @Published var showDeepSeekKeyPrompt = false
     @Published var deepSeekKeyInput = ""
 
     private let coordinator: any ProviderSwitching
+    private let modelGuard: (any DeepSeekModelGuarding)?
     private let snapshotsRootURL: URL
     private let logsURL: URL
     private let secretStore: (any SecretStore)?
@@ -130,11 +132,14 @@ final class AppModel: ObservableObject {
         secretStore: (any SecretStore)? = nil,
         keychainService: String? = nil,
         keychainAccount: String? = nil,
+        modelGuard: (any DeepSeekModelGuarding)? = nil,
+        automaticallyStartModelGuard: Bool = true,
         openURL: @escaping (URL) -> Void = { url in
             _ = NSWorkspace.shared.open(url)
         }
     ) {
         self.coordinator = coordinator
+        self.modelGuard = modelGuard
         self.snapshotsRootURL = snapshotsRootURL
         self.logsURL = logsURL
         self.secretStore = secretStore
@@ -144,6 +149,62 @@ final class AppModel: ObservableObject {
         let initialStatus = try? coordinator.currentStatus()
         self.providerStatus = initialStatus
         self.currentMode = initialStatus?.mode ?? (try? coordinator.currentMode()) ?? .unknown
+        self.modelGuardState = modelGuard?.state ?? .stopped
+
+        if automaticallyStartModelGuard {
+            startModelGuard()
+        }
+    }
+
+    func startModelGuard() {
+        guard let modelGuard else {
+            return
+        }
+
+        modelGuard.onStateChange = { [weak self] state in
+            Task { @MainActor [weak self] in
+                self?.handleModelGuardStateChange(state)
+            }
+        }
+        modelGuardState = modelGuard.state
+        modelGuard.start()
+        modelGuardState = modelGuard.state
+    }
+
+    func stopModelGuard() {
+        guard let modelGuard else {
+            modelGuardState = .stopped
+            return
+        }
+
+        modelGuard.stop()
+        modelGuard.onStateChange = nil
+        modelGuardState = modelGuard.state
+    }
+
+    var modelGuardSummary: String {
+        switch modelGuardState {
+        case .stopped:
+            return "模型防误改守护未运行。"
+        case .monitoring:
+            return "DeepSeek 模型防误改守护正在运行。"
+        case let .repaired(model):
+            return "已自动恢复 DeepSeek 模型：\(model)。"
+        case let .failed(message):
+            return message
+        }
+    }
+
+    private func handleModelGuardStateChange(_ state: DeepSeekModelGuardState) {
+        modelGuardState = state
+        switch state {
+        case .stopped, .monitoring:
+            break
+        case let .repaired(model):
+            statusMessage = "已自动恢复 DeepSeek 模型：\(model)，避免 ChatGPT 的模型选择器把配置改成 GPT 模型。"
+        case let .failed(message):
+            statusMessage = message
+        }
     }
 
     func refresh() async {
@@ -157,11 +218,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func switchToDeepSeek() async {
+    @discardableResult
+    func switchToDeepSeek() async -> Bool {
         await switchTo(.deepSeek)
     }
 
-    func switchToGPT() async {
+    @discardableResult
+    func switchToGPT() async -> Bool {
         await switchTo(.gpt)
     }
 
@@ -238,8 +301,9 @@ final class AppModel: ObservableObject {
         openURL(target)
     }
 
-    private func switchTo(_ targetMode: ProviderMode) async {
-        guard !isBusy else { return }
+    @discardableResult
+    private func switchTo(_ targetMode: ProviderMode) async -> Bool {
+        guard !isBusy else { return false }
         isBusy = true
         statusMessage = "正在切换到 \(targetMode.displayName)，准备重启 ChatGPT…"
         defer { isBusy = false }
@@ -254,6 +318,7 @@ final class AppModel: ObservableObject {
                     .appendingPathComponent("config.toml")
             }
             statusMessage = result.status.summary
+            return true
         } catch let error as SwitchError {
             if targetMode == .deepSeek, case let .preflightFailed(messages) = error,
                messages.contains("DeepSeek API Key is missing") {
@@ -262,8 +327,10 @@ final class AppModel: ObservableObject {
             } else {
                 statusMessage = error.statusMessage
             }
+            return false
         } catch {
             statusMessage = "切换失败，配置保持不变。"
+            return false
         }
     }
 }

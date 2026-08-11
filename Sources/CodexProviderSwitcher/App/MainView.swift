@@ -46,6 +46,20 @@ struct MainView: View {
                 }
             }
 
+            GroupBox("DeepSeek 模型防误改守护") {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: guardIconName)
+                        .foregroundStyle(guardColor)
+                    Text(model.modelGuardSummary)
+                        .font(.callout)
+                    Spacer(minLength: 0)
+                }
+                Text("当 provider 仍然是 DeepSeek、但 ChatGPT 的模型选择器把根级模型改成 GPT 时，守护器会自动恢复 DeepSeek 模型。它只修改 config.toml，不读取或迁移历史记录。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             VStack(spacing: 10) {
                 Button {
                     showingDeepSeekConfirmation = true
@@ -134,6 +148,24 @@ struct MainView: View {
         case .gpt: return .blue
         case .deepSeek: return .orange
         case .unknown: return .secondary
+        }
+    }
+
+    private var guardIconName: String {
+        switch model.modelGuardState {
+        case .stopped: return "pause.circle"
+        case .monitoring: return "checkmark.shield"
+        case .repaired: return "arrow.uturn.backward.circle"
+        case .failed: return "exclamationmark.shield"
+        }
+    }
+
+    private var guardColor: Color {
+        switch model.modelGuardState {
+        case .stopped: return .secondary
+        case .monitoring: return .green
+        case .repaired: return .orange
+        case .failed: return .red
         }
     }
 
