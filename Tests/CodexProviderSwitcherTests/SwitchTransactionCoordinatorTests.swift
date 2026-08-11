@@ -100,6 +100,49 @@ final class SwitchTransactionCoordinatorTests: XCTestCase {
         XCTAssertEqual(context.modelResponseTester.callCount, 1)
     }
 
+    func testRepairDeepSeekModelIfNeededRestoresWrongModelWithoutTouchingHistory() async throws {
+        let context = try makeContext()
+        _ = try await context.coordinator.switchTo(.deepSeek)
+        let corrupted = try String(contentsOf: context.configURL)
+            .replacingOccurrences(
+                of: "model = \"deepseek-v4-flash\"",
+                with: "model = \"gpt-5.6-terra\""
+            )
+        try corrupted.write(to: context.configURL, atomically: true, encoding: .utf8)
+
+        let result = try await context.coordinator.repairDeepSeekModelIfNeeded()
+
+        XCTAssertEqual(result, .repaired(model: "deepseek-v4-flash"))
+        XCTAssertTrue(try String(contentsOf: context.configURL).contains(
+            "model = \"deepseek-v4-flash\""
+        ))
+        XCTAssertEqual(
+            try Data(contentsOf: context.stateURL),
+            Data("history sentinel".utf8)
+        )
+    }
+
+    func testRepairDeepSeekModelIfNeededNeverChangesGPTConfiguration() async throws {
+        let context = try makeContext()
+        let original = try Data(contentsOf: context.configURL)
+
+        let result = try await context.coordinator.repairDeepSeekModelIfNeeded()
+
+        XCTAssertEqual(result, .ignored)
+        XCTAssertEqual(try Data(contentsOf: context.configURL), original)
+    }
+
+    func testRepairDeepSeekModelIfNeededIgnoresLockContention() async throws {
+        let context = try makeContext()
+        context.lock.acquireError = SwitchLockError.alreadyHeld
+
+        let result = try await context.coordinator.repairDeepSeekModelIfNeeded()
+
+        XCTAssertEqual(result, .ignored)
+        XCTAssertEqual(context.lock.acquireCount, 1)
+        XCTAssertEqual(context.lock.releaseCount, 0)
+    }
+
     func testUnknownCurrentModeStopsBeforeWriting() async throws {
         let context = try makeContext(config: "model_provider = \"custom\"\n")
         let original = try Data(contentsOf: context.configURL)

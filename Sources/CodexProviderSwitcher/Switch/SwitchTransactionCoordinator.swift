@@ -95,6 +95,11 @@ struct SwitchResult: Equatable, Sendable {
     }
 }
 
+enum DeepSeekModelGuardResult: Equatable, Sendable {
+    case ignored
+    case repaired(model: String)
+}
+
 enum SwitchError: Error, Equatable {
     case alreadyRunning
     case lockFailed
@@ -198,6 +203,43 @@ final class SwitchTransactionCoordinator: @unchecked Sendable, ProviderSwitching
             processRunning: processRunning,
             verification: verification
         )
+    }
+
+    func repairDeepSeekModelIfNeeded() async throws -> DeepSeekModelGuardResult {
+        do {
+            try lock.acquire()
+        } catch let error as SwitchLockError {
+            if error == .alreadyHeld {
+                return .ignored
+            }
+            throw SwitchError.lockFailed
+        } catch {
+            throw SwitchError.lockFailed
+        }
+        defer { lock.release() }
+
+        let originalConfig = try readConfig()
+        guard let repairedConfig = try transformer.repairDeepSeekModel(
+            in: originalConfig,
+            settings: settings.deepSeek
+        ) else {
+            return .ignored
+        }
+
+        do {
+            try snapshotStore.atomicallyReplace(
+                configURL: settings.codexConfigURL,
+                with: repairedConfig
+            )
+        } catch {
+            throw SwitchError.configurationWriteFailed
+        }
+
+        if var manifest = try? manifestStore.load() {
+            manifest.lastVerification = nil
+            try? manifestStore.save(manifest)
+        }
+        return .repaired(model: settings.deepSeek.model)
     }
 
     func verifyCurrentProvider() async throws -> ProviderStatus {
