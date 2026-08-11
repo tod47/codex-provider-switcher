@@ -115,6 +115,44 @@ final class RecordingSwitchLock: SwitchLocking, @unchecked Sendable {
     }
 }
 
+final class RecordingConfigDirectoryWatcher: ConfigDirectoryWatching, @unchecked Sendable {
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    private var onChange: (@Sendable () -> Void)?
+
+    func start(onChange: @escaping @Sendable () -> Void) throws {
+        startCount += 1
+        self.onChange = onChange
+    }
+
+    func stop() {
+        stopCount += 1
+        onChange = nil
+    }
+
+    func emitChange() {
+        onChange?()
+    }
+}
+
+final class RecordingDeepSeekModelRepairer: DeepSeekModelRepairing, @unchecked Sendable {
+    var result: Result<DeepSeekModelGuardResult, Error> = .success(.ignored)
+    var delayNanoseconds: UInt64 = 0
+    private(set) var callCount = 0
+
+    func repairDeepSeekModelIfNeeded() async throws -> DeepSeekModelGuardResult {
+        callCount += 1
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        return try result.get()
+    }
+
+    func resetCallCount() {
+        callCount = 0
+    }
+}
+
 struct FixedClock: Clock {
     let now: Date
 }
