@@ -79,6 +79,26 @@ struct CodexConfigTransformer {
         )
     }
 
+    func repairDeepSeekModel(
+        in text: String,
+        settings: DeepSeekSettings
+    ) throws -> String? {
+        var parsed = try ParsedConfig(text: text)
+        guard detectMode(in: text, settings: settings) == .deepSeek,
+              let modelAssignment = parsed.singleAssignment(table: nil, key: "model"),
+              modelAssignment.value != settings.model
+        else {
+            return nil
+        }
+
+        parsed.lines[modelAssignment.lineIndex] = assignmentLine(
+            key: "model",
+            value: settings.model,
+            originalLine: parsed.lines[modelAssignment.lineIndex]
+        )
+        return parsed.rendered()
+    }
+
     func makeDeepSeekConfig(from gptConfig: String, settings: DeepSeekSettings) throws -> String {
         var parsed = try ParsedConfig(text: gptConfig)
         try validate(parsed)

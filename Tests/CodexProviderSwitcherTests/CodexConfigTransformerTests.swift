@@ -75,6 +75,42 @@ final class CodexConfigTransformerTests: XCTestCase {
         )
     }
 
+    func testRepairDeepSeekModelRewritesOnlyRootModel() throws {
+        let transformer = CodexConfigTransformer()
+        let deepSeekConfig = try transformer.makeDeepSeekConfig(
+            from: fixture,
+            settings: deepSeekSettings
+        )
+        let corrupted = deepSeekConfig.replacingOccurrences(
+            of: "model = \"deepseek-v4-flash\"",
+            with: "model = \"gpt-5.6-terra\""
+        )
+
+        let repaired = try transformer.repairDeepSeekModel(
+            in: corrupted,
+            settings: deepSeekSettings
+        )
+
+        XCTAssertEqual(repaired, deepSeekConfig)
+    }
+
+    func testRepairDeepSeekModelReturnsNilWhenAlreadyCorrectOrNotDeepSeek() throws {
+        let transformer = CodexConfigTransformer()
+        let deepSeekConfig = try transformer.makeDeepSeekConfig(
+            from: fixture,
+            settings: deepSeekSettings
+        )
+
+        XCTAssertNil(try transformer.repairDeepSeekModel(
+            in: deepSeekConfig,
+            settings: deepSeekSettings
+        ))
+        XCTAssertNil(try transformer.repairDeepSeekModel(
+            in: fixture,
+            settings: deepSeekSettings
+        ))
+    }
+
     func testModeDetectionAcceptsLegacyDeepSeekV1BaseURL() throws {
         let transformer = CodexConfigTransformer()
         let currentSettings = try DeepSeekSettings(
