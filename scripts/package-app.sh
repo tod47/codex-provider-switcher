@@ -1,13 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <staging-directory>" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo "usage: $0 <staging-directory> [version]" >&2
     exit 2
 fi
 
 staging_directory="$1"
+release_version="${2:-0.2.0}"
 project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+    echo "invalid release version: $release_version" >&2
+    exit 2
+fi
 
 if [ -z "$staging_directory" ] || [ "$staging_directory" = "/" ] || [ "$staging_directory" = "$project_root" ]; then
     echo "refusing to use an unsafe staging directory: $staging_directory" >&2
@@ -27,6 +33,12 @@ fi
 main_bundle="$staging_directory/Codex Provider Switcher.app"
 deepseek_bundle="$staging_directory/Codex 切到 DeepSeek.app"
 gpt_bundle="$staging_directory/Codex 切回 GPT.app"
+icon_path="$project_root/Resources/CodexProviderSwitcher.icns"
+
+if [ ! -f "$icon_path" ]; then
+    echo "missing application icon: $icon_path" >&2
+    exit 1
+fi
 
 for bundle_path in "$main_bundle" "$deepseek_bundle" "$gpt_bundle"; do
     if [ -e "$bundle_path" ] || [ -L "$bundle_path" ]; then
@@ -57,9 +69,11 @@ write_info_plist() {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$release_version</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>$release_version</string>
+    <key>CFBundleIconFile</key>
+    <string>CodexProviderSwitcher</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
@@ -71,8 +85,9 @@ write_info_plist() {
 PLIST
 }
 
-mkdir -p "$main_bundle/Contents/MacOS"
+mkdir -p "$main_bundle/Contents/MacOS" "$main_bundle/Contents/Resources"
 cp "$binary_path" "$main_bundle/Contents/MacOS/CodexProviderSwitcher"
+cp "$icon_path" "$main_bundle/Contents/Resources/CodexProviderSwitcher.icns"
 chmod 755 "$main_bundle/Contents/MacOS/CodexProviderSwitcher"
 write_info_plist "$main_bundle" "Codex Provider Switcher" "CodexProviderSwitcher"
 
@@ -82,7 +97,8 @@ make_wrapper_bundle() {
     local mode="$3"
     local launcher_path="$bundle_path/Contents/MacOS/CodexProviderSwitcherLauncher"
 
-    mkdir -p "$bundle_path/Contents/MacOS"
+    mkdir -p "$bundle_path/Contents/MacOS" "$bundle_path/Contents/Resources"
+    cp "$icon_path" "$bundle_path/Contents/Resources/CodexProviderSwitcher.icns"
     write_info_plist "$bundle_path" "$display_name" "CodexProviderSwitcherLauncher"
     {
         printf '%s\n' '#!/bin/sh'
@@ -113,6 +129,32 @@ for bundle_path in "$main_bundle" "$deepseek_bundle" "$gpt_bundle"; do
     /usr/bin/codesign --force --deep --sign - "$bundle_path"
 done
 
+release_basename="Codex-Provider-Switcher-$release_version"
+zip_path="$staging_directory/$release_basename.zip"
+dmg_path="$staging_directory/$release_basename.dmg"
+zip_source_directory="$staging_directory/$release_basename"
+
+rm -rf "$zip_source_directory" "$zip_path" "$dmg_path"
+mkdir -p "$zip_source_directory"
+/usr/bin/ditto "$main_bundle" "$zip_source_directory/Codex Provider Switcher.app"
+/usr/bin/ditto "$deepseek_bundle" "$zip_source_directory/Codex 切到 DeepSeek.app"
+/usr/bin/ditto "$gpt_bundle" "$zip_source_directory/Codex 切回 GPT.app"
+
+(cd "$staging_directory" && /usr/bin/zip -qry "$zip_path" "$release_basename")
+
+dmg_source_directory="$staging_directory/$release_basename-dmg"
+rm -rf "$dmg_source_directory"
+mkdir -p "$dmg_source_directory"
+/usr/bin/ditto "$main_bundle" "$dmg_source_directory/Codex Provider Switcher.app"
+/usr/bin/ditto "$deepseek_bundle" "$dmg_source_directory/Codex 切到 DeepSeek.app"
+/usr/bin/ditto "$gpt_bundle" "$dmg_source_directory/Codex 切回 GPT.app"
+ln -s /Applications "$dmg_source_directory/Applications"
+/usr/bin/hdiutil create -volname "Codex Provider Switcher $release_version" \
+    -srcfolder "$dmg_source_directory" \
+    -ov -format UDZO "$dmg_path" >/dev/null
+
+rm -rf "$zip_source_directory" "$dmg_source_directory"
+
 echo "Packaged:"
 printf '  %s\n' "$main_bundle" "$deepseek_bundle" "$gpt_bundle"
-
+printf '  %s\n' "$dmg_path" "$zip_path"
