@@ -1,89 +1,179 @@
 # Codex Provider Switcher
 
-一个原生 macOS SwiftUI 工具，用于在本机现有 GPT provider 和实验性 DeepSeek provider 之间切换，并在切换后重启 ChatGPT/Codex 主程序。
+原生 macOS SwiftUI 工具，用于在本机现有的 GPT provider 和实验性 DeepSeek provider 之间切换，并在切换后重启 ChatGPT/Codex 主程序，继续后续工作。
 
-这个项目的边界很明确：
+> 当前可下载版本：**v0.2.0**。需要 macOS 14 或更高版本。
 
-- 只修改当前用户的 Codex config.toml provider 配置；
-- 切换前创建带 SHA-256 的完整配置快照；
-- 使用同目录临时文件和原子替换；
-- API Key 只保存到 macOS 钥匙串，不写入 TOML、参数、桌面包装器或日志；
-- 不读取、不修改 state_5.sqlite、其 WAL/SHM 文件、会话 JSONL 或历史线程记录；
-- DeepSeek 接入是实验性的，默认 Responses endpoint 为 `https://api.deepseek.com`，模型为 `deepseek-v4-flash`；仍不能保证 ChatGPT/Codex 客户端和旧会话全部兼容。
+## 下载安装
 
-本项目采用 MIT License，详见仓库根目录的 LICENSE 文件。
+推荐从 GitHub Release 下载已经打包好的应用：
 
-贡献和安全边界见 CONTRIBUTING.md、SECURITY.md；分层、事务阶段和数据不变式见 docs/architecture.md。
+- [下载 DMG 安装包](https://github.com/tod47/codex-provider-switcher/releases/download/v0.2.0/Codex-Provider-Switcher-0.2.0.dmg)
+- [下载 ZIP 便携包](https://github.com/tod47/codex-provider-switcher/releases/download/v0.2.0/Codex-Provider-Switcher-0.2.0.zip)
+- [查看 v0.2.0 Release](https://github.com/tod47/codex-provider-switcher/releases/tag/v0.2.0)
 
-## 构建和测试
+DMG 中包含：
 
-需要 macOS 14 或更高版本、Swift 6 工具链：
+- `Codex Provider Switcher.app`：主应用；
+- `Codex 切到 DeepSeek.app`：切换到 DeepSeek 并重启 ChatGPT；
+- `Codex 切回 GPT.app`：恢复 GPT 配置并重启 ChatGPT；
+- `Applications`：拖拽安装入口。
 
-    swift test
-    swift build -c debug
+本版本使用 ad-hoc code signing，没有 Apple Developer ID notarization。第一次打开时如果 macOS 提示无法验证开发者，请在 Finder 中右键应用并选择“打开”。
 
-正式打包到一个临时目录：
+## v0.2.0 功能
 
-    bash scripts/package-app.sh /tmp/codex-provider-switcher-staging
-
-脚本会生成：
-
-- Codex Provider Switcher.app
-- Codex 切到 DeepSeek.app
-- Codex 切回 GPT.app
-
-安装到当前用户的 Applications 和桌面：
-
-    bash scripts/install-desktop-launchers.sh /tmp/codex-provider-switcher-staging
-
-安装脚本只会替换 bundle identifier 为 local.codex.provider-switcher 的同项目目标。如果同名目标属于其他应用，会停止并报告冲突；已有的 DeepSeek V4 Flash Max.command 文件不会被碰触。
+- 在 GPT 和实验性 DeepSeek provider 之间切换，并自动重启 ChatGPT/Codex 主程序；
+- 切换前保存完整的 GPT `config.toml` 快照，失败时尽力恢复原配置和原 provider；
+- DeepSeek 模式成功后常驻菜单栏，监视配置目录；
+- 当 ChatGPT 的模型选择器把 DeepSeek 配置的根级 `model` 改成 GPT 模型时，自动恢复为 `deepseek-v4-flash`；
+- 自动修复复用切换锁和原子替换，不与切换事务并发写配置；
+- API Key 只保存到 macOS 钥匙串，并在启动 ChatGPT 时通过进程环境传递；
+- 主窗口显示 provider、配置模型、endpoint、进程状态、验证结果和模型守护状态；
+- 提供“仅检查”和“测试当前请求”操作，后者只在用户主动点击时发送最小 Responses 请求；
+- 应用不读取、不修改 Codex 历史数据库、WAL/SHM、会话 JSONL 或其他历史桶。
 
 ## 使用方式
 
-打开主应用后，先观察“当前模式”，再选择：
+### 主应用
 
-- “切到 DeepSeek并重启 ChatGPT”：先做 endpoint 预检，备份当前 GPT 配置，优雅退出 ChatGPT，写入 DeepSeek provider 配置，再启动 ChatGPT；
-- “切回 GPT并重启 ChatGPT”：从最近一次 GPT 快照恢复完整配置，再启动 ChatGPT；
-- “仅检查”：只检查钥匙串中的凭据、Responses 声明和 endpoint 可访问性，不写配置、不退出 ChatGPT；
-- “测试当前请求”：仅在 DeepSeek 模式下发送一个最小 Responses 请求，读取返回的 `model` 字段，确认实际响应模型；这一步可能产生极少量 API 用量，需要手动点击才会执行；
-- “打开备份”：查看可用于人工恢复的配置快照。
+打开 `Codex Provider Switcher.app` 后：
 
-第一次使用 DeepSeek 时，应用会弹出 SecureField。API Key 会存入钥匙串服务 Codex Provider Switcher，不会被写进配置文件。
+1. 观察“当前模式”和“实际 provider 状态”；
+2. 点击“切到 DeepSeek并重启 ChatGPT”或“切回 GPT并重启 ChatGPT”；
+3. 切换完成后应用会留在菜单栏，DeepSeek 模式下模型防误改守护会继续运行；
+4. 需要确认网络配置时使用“仅检查”；需要确认实际响应模型时使用“测试当前请求”。
 
-桌面包装器只传递 --mode=deepseek 或 --mode=gpt，不携带任何密钥。为了便于测试和复用，也支持：
+第一次使用 DeepSeek 时，应用会要求输入 API Key。密钥只写入钥匙串服务 `Codex Provider Switcher`，不会写入 `config.toml`、命令行参数、桌面快捷方式或日志。
 
-    .build/release/CodexProviderSwitcher --check
-    .build/release/CodexProviderSwitcher --mode=deepseek --codex-home /path/to/.codex --chatgpt-app /path/to/ChatGPT.app
+### 桌面快捷方式和命令行
 
-没有参数时进入交互式 UI；有一次性 intent 时执行一次、显示结果并退出。
+桌面快捷方式只传递模式参数，不包含密钥。主 executable 也支持：
 
-## 数据位置和恢复
+```bash
+.build/release/CodexProviderSwitcher --mode=deepseek
+.build/release/CodexProviderSwitcher --mode=gpt
+.build/release/CodexProviderSwitcher --check
+```
 
-应用状态位于当前用户的：
+行为区别如下：
 
-    ~/Library/Application Support/Codex Provider Switcher/
+- `--mode=deepseek`：执行 DeepSeek 切换；成功后保持菜单栏常驻并启动模型守护；
+- `--mode=gpt`：执行 GPT 恢复；成功后保持菜单栏常驻，但不运行 DeepSeek 模型守护；
+- `--check`：只做一次 endpoint/凭据预检，显示结果后退出；
+- 无参数：进入交互式主窗口和菜单栏模式。
 
-其中包括 manifest.json、snapshots/、预留的 logs/ 目录和由操作系统管理的 `switch.lock.v2` 锁文件。快照文件保存的是完整 config.toml，并带有哈希校验。
+测试或其他配置目录可以注入路径：
 
-如果切换过程中 ChatGPT 未能退出，应用会在写配置前停止操作。如果写入或启动失败，应用会尽力恢复原配置、重启原 provider，并把事务标记为 rolledBack。如果主程序或系统在事务中途异常退出，请先不要删除快照，再从最近的 GPT 快照人工恢复 config.toml，然后重新打开 ChatGPT。
+```bash
+.build/release/CodexProviderSwitcher \
+  --mode=deepseek \
+  --codex-home /path/to/.codex \
+  --chatgpt-app /path/to/ChatGPT.app
+```
 
-## 兼容性说明
+## DeepSeek 模型防误改
 
-切换完成后，主窗口会显示当前 provider、配置模型、endpoint、Codex 进程状态和验证结果。DeepSeek 会在重启后使用鉴权的 `GET /models` 检查配置模型是否出现在 provider 的模型目录中；点击“测试当前请求”后，应用才会发送一个最小 Responses 请求，并把返回的实际 `model` 写入状态。模型目录验证不等于已经验证工具调用、流式事件、上下文缓存、图片输入或会话恢复能力。ChatGPT 右下角的原生模型列表不作为 provider 状态来源。
+配置中的 `model_provider = "custom"` 是 provider ID，不是模型名。真正决定发送给 DeepSeek 的模型是根级配置：
 
-不要把同一个正在进行的线程在 DeepSeek 和 GPT 之间来回切换后继续使用。不同 provider 可能写入不同的 Responses 内容块；切回 GPT 后，旧线程重放时可能被 GPT 接口拒绝，例如 `Invalid 'input[6].content'`。遇到这种情况请在切回 GPT 后新建一个 GPT 线程，或手动复制必要的文字摘要继续；本工具不会修改历史数据库、WAL/SHM 文件或会话 JSONL。
+```toml
+model_provider = "custom"
+model = "deepseek-v4-flash"
 
-官方 Codex 配置参考：
+[model_providers.custom]
+base_url = "https://api.deepseek.com"
+wire_api = "responses"
+env_key = "DEEPSEEK_API_KEY"
+requires_openai_auth = false
+```
 
-- https://learn.chatgpt.com/docs/config-file/config-reference
-- https://learn.chatgpt.com/docs/config-file/config-advanced
+常驻守护器只有在 provider 的 endpoint、协议、环境变量名和鉴权声明仍然匹配 DeepSeek 时，才会把被改动的根级 `model` 恢复为设置中的 DeepSeek 模型。GPT 配置、未知 provider 和其他 TOML 内容不会被守护器自动修改。
 
-第三方 provider 接入可能受客户端版本、账号能力、服务端协议和地区网络影响。请把它当作可回滚的本地实验工具，不要把它当作 OpenAI 官方 ChatGPT Desktop 的内置 provider 功能。
+守护器对切换锁冲突只做有限次数重试，不会无限轮询。它保护的是下一次请求读取到的本地配置，不能撤回已经提交的请求、修改服务端响应或重写 ChatGPT/Codex 已经缓存的会话状态。
 
-## 当前版本验证
+## 数据边界和恢复
 
-当前实现已经通过 47 条 Swift 单元测试和 release build；测试覆盖配置转换、快照原子替换、Keychain 抽象、endpoint 预检、模型目录验证、实际响应模型验证、进程生命周期、进程表大输出、事务回滚、UI view-model、命令行 intent、锁并发和历史 sentinel 不变式。
+应用只写当前 Codex 配置文件，以及自己的 Application Support 目录：
 
-打包验收使用临时 staging 目录，三个 app bundle 均通过 plist 检查和 ad-hoc code-sign 验证。自动化验收不会点击 DeepSeek 切换；首次真实切换必须由用户明确在 UI 中触发。
+```text
+~/Library/Application Support/Codex Provider Switcher/
+```
 
-验证真实 Codex home 时，不应把普通 sqlite3 只读查询后的 WAL/SHM 哈希变化误判为应用写入证据：SQLite 读取器可能更新共享内存元数据。应用自身不连接历史数据库，历史保护以不打开数据库和事务测试中的 sentinel 为边界。
+自己的目录中可能包含 `manifest.json`、`snapshots/`、`logs/` 和由操作系统管理的 `switch.lock.v2`。应用不会打开或迁移：
+
+- `state_5.sqlite`；
+- SQLite 的 `-wal` 和 `-shm` 文件；
+- 会话 JSONL；
+- 历史线程表或其他历史桶。
+
+如果切换过程中的退出、写入、启动或验证失败，工具会尽力恢复原始完整配置并重新启动原 provider。切换前生成的 GPT 快照可以在主窗口中打开，供人工恢复使用。
+
+## 已知限制
+
+DeepSeek provider 是实验性接入。预检或模型目录检查通过，不等于已经验证工具调用、流式事件、图片输入、上下文缓存或全部旧会话兼容性。
+
+不要把同一个正在进行的线程在 DeepSeek 和 GPT 之间反复切换后继续使用。不同 provider 可能写入不同的 Responses 内容块，切回 GPT 后旧线程重放可能出现：
+
+```text
+Invalid 'input[6].content': array too long.
+```
+
+遇到这种情况，请在切回 GPT 后新建一个 GPT 线程，或手动复制必要的文字摘要继续。工具不会为了修复这类兼容性问题而修改历史数据库或会话文件。
+
+本工具是本地实验工具，不是 OpenAI 官方 ChatGPT Desktop 的内置 provider 功能。客户端版本、账号能力、服务端协议和网络环境都可能影响结果。
+
+## 从源码构建和打包
+
+开发环境需要 macOS 14 或更高版本、Swift 6 工具链：
+
+```bash
+swift build -c release
+```
+
+运行完整测试：
+
+```bash
+swift test
+```
+
+生成带图标的应用、桌面快捷方式、DMG 和 ZIP：
+
+```bash
+bash scripts/package-app.sh /tmp/codex-provider-switcher-staging 0.2.0
+```
+
+将 staging 中的应用安装到当前用户的 Applications 和桌面：
+
+```bash
+bash scripts/install-desktop-launchers.sh /tmp/codex-provider-switcher-staging
+```
+
+安装脚本只会替换 bundle identifier 为 `local.codex.provider-switcher` 的同项目目标；如果发现同名目标属于其他应用，会停止并报告冲突。
+
+## 发布检查状态
+
+`v0.2.0` 发布时已执行：
+
+- release 构建；
+- shell 脚本语法检查；
+- app bundle 的 `Info.plist` 检查；
+- `.icns` 图标存在性检查；
+- ad-hoc code signature 检查；
+- DMG/ZIP 内容检查；
+- 敏感路径和敏感内容检查。
+
+本次发布按维护者要求没有运行完整单元测试，也没有执行真实 provider 切换。贡献代码时请按照 [CONTRIBUTING.md](CONTRIBUTING.md) 运行完整测试，并使用临时 Codex home 验证。
+
+## 项目文档
+
+以下链接固定到当前发布版本，确保从默认分支首页访问时也不会因为分支内容不同而断链：
+
+- [使用说明](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/docs/usage.md)
+- [架构说明](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/docs/architecture.md)
+- [安全边界](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/SECURITY.md)
+- [贡献指南](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/CONTRIBUTING.md)
+- [MIT License](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/LICENSE)
+
+## 许可证
+
+本项目按 MIT License 发布，详见 [LICENSE](https://github.com/tod47/codex-provider-switcher/blob/v0.2.0/LICENSE)。
