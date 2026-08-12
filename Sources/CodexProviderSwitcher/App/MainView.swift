@@ -124,6 +124,11 @@ struct MainView: View {
             .font(.caption)
             .foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
+
+            Text("由vibe睦头人制作")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(24)
         .frame(minWidth: 440, minHeight: 360)
